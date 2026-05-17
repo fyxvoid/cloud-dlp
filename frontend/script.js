@@ -118,18 +118,259 @@ function updateChart(stats) {
     barErrors.style.height = pct(stats.errors) + "px";
 }
 
-// --- Upload ---
+// --- Upload: Multi-file queue ---
 const fileInput = document.getElementById("fileInput");
 const fileNameDisplay = document.getElementById("fileNameDisplay");
 const dropZone = document.getElementById("dropZone");
 const uploadResult = document.getElementById("uploadResult");
 const btnUpload = document.getElementById("btnUpload");
 
-fileInput.addEventListener("change", (e) => {
-    if (e.target.files.length > 0) {
-        fileNameDisplay.textContent = e.target.files[0].name;
+// State
+let fileQueue = []; // [{file, status, result}]
+let isScanning = false;
+let scanReport = [];
+let batchStartTime = 0;
+
+const ALLOWED_EXTS = new Set([".txt", ".json", ".csv", ".pdf"]);
+
+function extOf(name) {
+    const dot = name.lastIndexOf(".");
+    return dot >= 0 ? name.slice(dot).toLowerCase() : "";
+}
+
+function formatBytes(bytes) {
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB";
+    return (bytes / 1048576).toFixed(1) + " MB";
+}
+
+function formatMs(ms) {
+    return ms >= 1000 ? (ms / 1000).toFixed(2) + "s" : ms + "ms";
+}
+
+function addFilesToQueue(files) {
+    let added = 0;
+    Array.from(files).forEach((f) => {
+        if (!ALLOWED_EXTS.has(extOf(f.name))) {
+            toast(`Skipped ${f.name} — unsupported type`, "error");
+            return;
+        }
+        const dup = fileQueue.find((q) => q.file.name === f.name && q.file.size === f.size && q.status === "pending");
+        if (dup) return;
+        fileQueue.push({ file: f, status: "pending", result: null });
+        added++;
+    });
+    if (added > 0) {
+        renderQueue();
+        document.getElementById("fileQueue").style.display = "block";
+        document.getElementById("batchSummary").style.display = "none";
+        uploadResult.className = "result";
+    }
+    updateDropZoneLabel();
+}
+
+function updateDropZoneLabel() {
+    const pending = fileQueue.filter((i) => i.status === "pending").length;
+    if (pending === 0) {
+        fileNameDisplay.textContent = "Click or drag files to scan";
+        fileNameDisplay.style.color = "";
+    } else {
+        fileNameDisplay.textContent = pending + " file" + (pending === 1 ? "" : "s") + " ready";
         fileNameDisplay.style.color = "var(--primary)";
     }
+}
+
+function renderQueue() {
+    const list = document.getElementById("queueList");
+    const countEl = document.getElementById("queueCount");
+    if (countEl) countEl.textContent = fileQueue.length;
+
+    const ICON = { pending: "○", scanning: "◌", allowed: "✓", blocked: "✗", error: "⚠" };
+    const fragment = document.createDocumentFragment();
+
+    fileQueue.forEach((item, idx) => {
+        const div = document.createElement("div");
+        div.className = "queue-item queue-status-" + item.status;
+        div.id = "queue-item-" + idx;
+
+        const icon = ICON[item.status] || "○";
+        const sizeStr = formatBytes(item.file.size);
+        const risk = item.result && item.result.risk ? item.result.risk : null;
+        const riskHtml = risk ? `<span class="risk-badge risk-${risk.toLowerCase()}">${risk}</span>` : "";
+        const timeHtml = item.result && item.result.scan_ms != null
+            ? `<span class="scan-time">${formatMs(item.result.scan_ms)}</span>` : "";
+
+        let detailHtml = "";
+        if (item.status === "blocked" && item.result && item.result.reason) {
+            detailHtml = `<div class="queue-detail queue-detail-blocked">Violations: ${escapeHtml(arrayOrString(item.result.reason))}</div>`;
+        } else if (item.status === "allowed" && item.result && item.result.file_hash) {
+            detailHtml = `<div class="queue-detail queue-detail-allowed">Hash: <code>${escapeHtml(item.result.file_hash.slice(0, 20))}…</code></div>`;
+        } else if (item.status === "error" && item.result && item.result.reason) {
+            detailHtml = `<div class="queue-detail queue-detail-error">${escapeHtml(arrayOrString(item.result.reason))}</div>`;
+        }
+
+        const removeBtn = item.status === "pending"
+            ? `<button type="button" class="btn-remove-file" data-idx="${idx}" title="Remove file" aria-label="Remove ${escapeHtml(item.file.name)}">×</button>`
+            : "";
+
+        div.innerHTML =
+            `<div class="queue-item-row">` +
+            `<span class="queue-icon queue-icon-${item.status}" aria-hidden="true">${icon}</span>` +
+            `<span class="queue-filename" title="${escapeHtml(item.file.name)}">${escapeHtml(item.file.name)}</span>` +
+            `<span class="queue-size">${sizeStr}</span>` +
+            riskHtml + timeHtml + removeBtn +
+            `</div>` + detailHtml;
+
+        fragment.appendChild(div);
+    });
+
+    list.innerHTML = "";
+    list.appendChild(fragment);
+
+    list.querySelectorAll(".btn-remove-file").forEach((btn) => {
+        btn.addEventListener("click", () => {
+            const idx = parseInt(btn.getAttribute("data-idx"), 10);
+            fileQueue.splice(idx, 1);
+            renderQueue();
+            if (!fileQueue.length) {
+                document.getElementById("fileQueue").style.display = "none";
+            }
+            updateDropZoneLabel();
+        });
+    });
+}
+
+function updateProgress(done, total) {
+    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+    document.getElementById("progressCurrent").textContent = done;
+    document.getElementById("progressTotal").textContent = total;
+    document.getElementById("progressPct").textContent = pct + "%";
+    document.getElementById("progressBarFill").style.width = pct + "%";
+}
+
+async function scanAllFiles() {
+    if (isScanning) return;
+    const pending = fileQueue.filter((i) => i.status === "pending");
+    if (!pending.length) {
+        toast("No pending files to scan", "error");
+        return;
+    }
+
+    isScanning = true;
+    btnUpload.disabled = true;
+    scanReport = [];
+    batchStartTime = Date.now();
+    uploadResult.className = "result";
+
+    document.getElementById("scanProgress").style.display = "block";
+    document.getElementById("batchSummary").style.display = "none";
+    updateProgress(0, pending.length);
+
+    let done = 0;
+    for (const item of pending) {
+        item.status = "scanning";
+        renderQueue();
+
+        const formData = new FormData();
+        formData.append("file", item.file);
+        try {
+            const response = await fetch(`${API_BASE}/upload`, { method: "POST", body: formData });
+            const data = await response.json().catch(() => ({}));
+
+            if (!response.ok) {
+                item.status = "error";
+                item.result = { status: "ERROR", reason: getErrorMsg(data, response), risk: "MEDIUM", scan_ms: 0 };
+            } else if (data.status === "BLOCKED") {
+                item.status = "blocked";
+                item.result = data;
+            } else if (data.status === "ERROR") {
+                item.status = "error";
+                item.result = data;
+            } else {
+                item.status = "allowed";
+                item.result = data;
+            }
+        } catch {
+            item.status = "error";
+            item.result = { status: "ERROR", reason: "Connection error", risk: "MEDIUM", scan_ms: 0 };
+        }
+
+        scanReport.push({
+            filename: item.file.name,
+            size_bytes: item.file.size,
+            status: item.result.status,
+            risk: item.result.risk || "—",
+            violations: item.result.violations || 0,
+            reason: item.result.reason || [],
+            file_hash: item.result.file_hash || null,
+            scan_ms: item.result.scan_ms || 0,
+            scanned_at: new Date().toISOString(),
+        });
+
+        done++;
+        renderQueue();
+        updateProgress(done, pending.length);
+    }
+
+    isScanning = false;
+    btnUpload.disabled = false;
+    fileInput.value = "";
+    updateDropZoneLabel();
+    loadStats();
+    loadLogs();
+    loadAssets();
+    showBatchSummary();
+}
+
+function showBatchSummary() {
+    const allowed = fileQueue.filter((i) => i.status === "allowed").length;
+    const blocked = fileQueue.filter((i) => i.status === "blocked").length;
+    const errors = fileQueue.filter((i) => i.status === "error").length;
+    const totalMs = Date.now() - batchStartTime;
+
+    document.getElementById("summaryAllowed").textContent = allowed;
+    document.getElementById("summaryBlocked").textContent = blocked;
+    document.getElementById("summaryError").textContent = errors;
+    document.getElementById("summaryTime").textContent = formatMs(totalMs);
+    document.getElementById("batchSummary").style.display = "block";
+    document.getElementById("scanProgress").style.display = "none";
+
+    if (blocked > 0 || errors > 0) {
+        toast(`${blocked} blocked, ${errors} error(s) — check the queue below`, "error");
+    } else {
+        toast(`All ${allowed} file(s) passed and stored securely`);
+    }
+}
+
+function downloadReport() {
+    if (!scanReport.length) {
+        toast("No scan data to export", "error");
+        return;
+    }
+    const report = {
+        generated_at: new Date().toISOString(),
+        tool: "Cloud DLP System",
+        total_files: scanReport.length,
+        total_scan_ms: scanReport.reduce((s, r) => s + r.scan_ms, 0),
+        summary: {
+            allowed: scanReport.filter((r) => r.status === "ALLOWED").length,
+            blocked: scanReport.filter((r) => r.status === "BLOCKED").length,
+            errors: scanReport.filter((r) => r.status === "ERROR").length,
+        },
+        results: scanReport,
+    };
+    const blob = new Blob([JSON.stringify(report, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "cloud_dlp_scan_report_" + new Date().toISOString().slice(0, 10) + ".json";
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast("Scan report downloaded");
+}
+
+// File input / drag-and-drop
+fileInput.addEventListener("change", (e) => {
+    if (e.target.files.length > 0) addFilesToQueue(e.target.files);
 });
 
 ["dragenter", "dragover", "dragleave", "drop"].forEach((ev) => {
@@ -143,111 +384,37 @@ fileInput.addEventListener("change", (e) => {
 });
 dropZone.addEventListener("drop", (e) => {
     const files = e.dataTransfer.files;
-    fileInput.files = files;
-    if (files.length > 0) {
-        fileNameDisplay.textContent = files[0].name;
-        fileNameDisplay.style.color = "var(--primary)";
-    }
+    if (files.length > 0) addFilesToQueue(files);
 });
 
-async function uploadFile() {
-    if (fileInput.files.length === 0) {
-        toast("Please select a file", "error");
-        return;
-    }
-    const formData = new FormData();
-    formData.append("file", fileInput.files[0]);
+btnUpload.addEventListener("click", scanAllFiles);
 
-    btnUpload.disabled = true;
-    uploadResult.textContent = "Scanning…";
-    uploadResult.className = "result visible";
-    uploadResult.style.color = "var(--text-dim)";
+document.getElementById("clearQueue").addEventListener("click", () => {
+    fileQueue = fileQueue.filter((i) => i.status !== "pending");
+    renderQueue();
+    if (!fileQueue.length) document.getElementById("fileQueue").style.display = "none";
+    updateDropZoneLabel();
+});
 
-    try {
-        const response = await fetch(`${API_BASE}/upload`, { method: "POST", body: formData });
-        const data = await response.json().catch(() => ({}));
-        uploadResult.classList.remove("allowed", "blocked", "error");
-
-        if (!response.ok) {
-            const msg = getErrorMsg(data, response);
-            uploadResult.textContent = "Error – " + msg;
-            uploadResult.className = "result visible error";
-            loadLogs();
-            loadStats();
-            return;
-        }
-
-        if (data.status === "BLOCKED") {
-            const reason = arrayOrString(data.reason);
-            uploadResult.innerHTML = "Blocked – sensitive data: " + escapeHtml(reason);
-            uploadResult.className = "result visible blocked";
-        } else if (data.status === "ERROR") {
-            uploadResult.textContent = "Error – " + arrayOrString(data.reason);
-            uploadResult.className = "result visible error";
-        } else {
-            uploadResult.innerHTML =
-                "Encrypted and stored." +
-                (data.file_hash
-                    ? '<div class="hash-display">Hash: ' + escapeHtml(data.file_hash) + "</div>"
-                    : "");
-            uploadResult.className = "result visible allowed";
-            toast("File stored successfully");
-            fileInput.value = "";
-            fileNameDisplay.textContent = "Click or drag file to scan";
-            fileNameDisplay.style.color = "";
-            loadAssets();
-            loadStats();
-        }
-        loadLogs();
-    } catch {
-        uploadResult.textContent = "Connection error. Is the backend running?";
-        uploadResult.className = "result visible error";
-        toast("Connection failed", "error");
-    } finally {
-        btnUpload.disabled = false;
-    }
-}
-
-btnUpload.addEventListener("click", uploadFile);
+document.getElementById("downloadReport").addEventListener("click", downloadReport);
+document.getElementById("scanMore").addEventListener("click", () => {
+    fileQueue = [];
+    scanReport = [];
+    document.getElementById("fileQueue").style.display = "none";
+    document.getElementById("batchSummary").style.display = "none";
+    document.getElementById("scanProgress").style.display = "none";
+    uploadResult.className = "result";
+    updateDropZoneLabel();
+});
 
 // --- Demo uploads ---
-const DEMO_SAFE = "This is a safe document with no sensitive information.\nIt can be stored after scanning.";
-const DEMO_SENSITIVE = "Contact: john@example.com\nPhone: 9876543210\nPassword: mySecret123";
+const DEMO_SAFE = "This is a safe document with no sensitive information.\nIt contains project notes and meeting summaries.\nAll content is cleared for storage.";
+const DEMO_SENSITIVE = "Contact: john@example.com\nPhone: 9876543210\nPassword: mySecret123\nSSN: 123-45-6789";
 
 function uploadDemo(content, filename) {
     const file = new File([content], filename, { type: "text/plain" });
-    const formData = new FormData();
-    formData.append("file", file);
-    fileNameDisplay.textContent = filename;
-    fileNameDisplay.style.color = "var(--primary)";
-    btnUpload.disabled = true;
-    uploadResult.textContent = "Scanning…";
-    uploadResult.className = "result visible";
-    uploadResult.style.color = "var(--text-dim)";
-    fetch(`${API_BASE}/upload`, { method: "POST", body: formData })
-        .then((r) => r.json().catch(() => ({})))
-        .then((data) => {
-            uploadResult.classList.remove("allowed", "blocked", "error");
-            if (data.status === "BLOCKED") {
-                uploadResult.innerHTML = "Blocked – sensitive data: " + escapeHtml(arrayOrString(data.reason));
-                uploadResult.className = "result visible blocked";
-            } else if (data.status === "ERROR") {
-                uploadResult.textContent = "Error – " + arrayOrString(data.reason);
-                uploadResult.className = "result visible error";
-            } else {
-                uploadResult.innerHTML = "Encrypted and stored." + (data.file_hash ? '<div class="hash-display">Hash: ' + escapeHtml(data.file_hash) + "</div>" : "");
-                uploadResult.className = "result visible allowed";
-                toast("File stored successfully");
-                loadAssets();
-            }
-            loadStats();
-            loadLogs();
-        })
-        .catch(() => {
-            uploadResult.textContent = "Connection error.";
-            uploadResult.className = "result visible error";
-        })
-        .finally(() => { btnUpload.disabled = false; });
+    addFilesToQueue([file]);
+    toast(`Added ${filename} to queue — click Scan to run`);
 }
 
 document.getElementById("demoSafe").addEventListener("click", () => uploadDemo(DEMO_SAFE, "demo_safe.txt"));

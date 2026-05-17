@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -25,6 +26,91 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _risk_level(findings: list) -> str:
+    if not findings:
+        return "LOW"
+    return "HIGH" if len(findings) >= 3 else "MEDIUM"
+
+
+async def _process_file(file: UploadFile) -> Dict[str, Any]:
+    """Core DLP pipeline: validate → scan → encrypt → store. Returns a result dict (no exceptions)."""
+    t0 = time.perf_counter()
+    content = await file.read()
+    filename = file.filename or "unknown"
+
+    if len(content) > MAX_FILE_SIZE:
+        log_event(filename, "ERROR", ["File too large"])
+        return {
+            "filename": filename, "status": "ERROR",
+            "reason": ["File too large (Max 5MB)"], "risk": "HIGH",
+            "scan_ms": int((time.perf_counter() - t0) * 1000),
+        }
+
+    content_type = file.content_type or ""
+    if content_type not in ALLOWED_MIME_TYPES:
+        log_event(filename, "ERROR", [f"Unsupported type: {content_type or 'unknown'}"])
+        return {
+            "filename": filename, "status": "ERROR",
+            "reason": [f"Unsupported file type: {content_type or 'unknown'}"], "risk": "MEDIUM",
+            "scan_ms": int((time.perf_counter() - t0) * 1000),
+        }
+
+    text = content.decode(errors="ignore")
+    try:
+        findings = detector.scan(text)
+    except Exception as e:
+        log_event(filename, "ERROR", [f"Scan error: {str(e)}"])
+        return {
+            "filename": filename, "status": "ERROR",
+            "reason": [f"Scan error: {str(e)}"], "risk": "MEDIUM",
+            "scan_ms": int((time.perf_counter() - t0) * 1000),
+        }
+
+    if findings:
+        log_event(filename, "BLOCKED", findings)
+        return {
+            "filename": filename, "status": "BLOCKED",
+            "reason": findings, "risk": _risk_level(findings),
+            "violations": len(findings),
+            "scan_ms": int((time.perf_counter() - t0) * 1000),
+        }
+
+    log_event(filename, "ALLOWED", [])
+
+    try:
+        encrypted, file_hash = encrypt_and_hash(content)
+        storage_path = store_encrypted(encrypted)
+    except ValueError as e:
+        log_event(filename, "ERROR", [f"Invalid filename: {str(e)}"])
+        return {
+            "filename": filename, "status": "ERROR",
+            "reason": [f"Invalid filename: {str(e)}"], "risk": "MEDIUM",
+            "scan_ms": int((time.perf_counter() - t0) * 1000),
+        }
+    except Exception as e:
+        log_event(filename, "ERROR", [f"Storage error: {str(e)}"])
+        return {
+            "filename": filename, "status": "ERROR",
+            "reason": [f"Storage error: {str(e)}"], "risk": "MEDIUM",
+            "scan_ms": int((time.perf_counter() - t0) * 1000),
+        }
+
+    with get_db_session() as db:
+        asset = StoredAsset(filename=filename, file_hash=file_hash, storage_path=storage_path)
+        db.add(asset)
+        db.flush()
+        asset_id = asset.id
+
+    return {
+        "filename": filename, "status": "ALLOWED",
+        "message": "Encrypted and stored",
+        "asset_id": asset_id, "file_hash": file_hash,
+        "storage_path": storage_path, "risk": "LOW",
+        "violations": 0,
+        "scan_ms": int((time.perf_counter() - t0) * 1000),
+    }
 
 
 @app.get("/health")
@@ -74,81 +160,44 @@ async def upload_file(file: UploadFile = File(...)) -> Dict[str, Any]:
     Handle file upload: validate, run DLP scan, and store if allowed.
 
     Returns:
-        Dict with "status" ("ALLOWED" | "BLOCKED" | "ERROR") and optional
-        "reason" or "storage_path". Client errors (size, type) return 400;
-        server errors (scan, storage) return 500.
+        Dict with "status" ("ALLOWED" | "BLOCKED" | "ERROR"), optional "reason",
+        "risk" level, and "scan_ms" performance metric.
     """
-    content = await file.read()
+    result = await _process_file(file)
+    status = result.get("status")
+    if status == "ERROR":
+        reason = result.get("reason", [])
+        code = 400 if any("large" in r or "type" in r or "filename" in r for r in reason) else 500
+        raise HTTPException(status_code=code, detail={"status": "ERROR", "reason": reason})
+    return result
 
-    # 1. File size check
-    if len(content) > MAX_FILE_SIZE:
-        log_event(file.filename, "ERROR", ["File too large"])
-        raise HTTPException(
-            status_code=400,
-            detail={"status": "ERROR", "reason": ["File too large (Max 5MB)"]},
-        )
 
-    # 2. MIME type check
-    content_type = file.content_type or ""
-    if content_type not in ALLOWED_MIME_TYPES:
-        log_event(file.filename, "ERROR", [f"Unsupported type: {content_type or 'unknown'}"])
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "status": "ERROR",
-                "reason": [f"Unsupported file type: {content_type or 'unknown'}"],
-            },
-        )
-
-    text = content.decode(errors="ignore")
-
-    try:
-        findings = detector.scan(text)
-    except Exception as e:
-        log_event(file.filename, "ERROR", [f"Scan error: {str(e)}"])
-        raise HTTPException(
-            status_code=500,
-            detail={"status": "ERROR", "reason": [f"Scan error: {str(e)}"]},
-        ) from e
-
-    if findings:
-        log_event(file.filename, "BLOCKED", findings)
-        return {"status": "BLOCKED", "reason": findings}
-
-    log_event(file.filename, "ALLOWED", [])
-
-    try:
-        encrypted, file_hash = encrypt_and_hash(content)
-        storage_path = store_encrypted(encrypted)
-    except ValueError as e:
-        log_event(file.filename, "ERROR", [f"Invalid filename: {str(e)}"])
-        raise HTTPException(
-            status_code=400,
-            detail={"status": "ERROR", "reason": [f"Invalid filename: {str(e)}"]},
-        ) from e
-    except Exception as e:
-        log_event(file.filename, "ERROR", [f"Storage error: {str(e)}"])
-        raise HTTPException(
-            status_code=500,
-            detail={"status": "ERROR", "reason": [f"Storage error: {str(e)}"]},
-        ) from e
-
-    with get_db_session() as db:
-        asset = StoredAsset(
-            filename=file.filename,
-            file_hash=file_hash,
-            storage_path=storage_path,
-        )
-        db.add(asset)
-        db.flush()
-        asset_id = asset.id
-
+@app.post("/upload/batch")
+async def upload_files_batch(files: List[UploadFile] = File(...)) -> Dict[str, Any]:
+    """
+    Batch DLP scan: accepts up to 20 files, returns per-file results and aggregate summary.
+    Useful for bulk compliance checks and audit workflows.
+    """
+    if len(files) > 20:
+        raise HTTPException(status_code=400, detail="Maximum 20 files per batch request.")
+    results = []
+    for file in files:
+        results.append(await _process_file(file))
+    allowed = sum(1 for r in results if r["status"] == "ALLOWED")
+    blocked = sum(1 for r in results if r["status"] == "BLOCKED")
+    errors = sum(1 for r in results if r["status"] == "ERROR")
+    high_risk = sum(1 for r in results if r.get("risk") == "HIGH")
+    total_scan_ms = sum(r.get("scan_ms", 0) for r in results)
     return {
-        "status": "ALLOWED",
-        "message": "Encrypted and stored",
-        "asset_id": asset_id,
-        "file_hash": file_hash,
-        "storage_path": storage_path,
+        "results": results,
+        "summary": {
+            "total": len(files),
+            "allowed": allowed,
+            "blocked": blocked,
+            "errors": errors,
+            "high_risk": high_risk,
+            "total_scan_ms": total_scan_ms,
+        },
     }
 
 

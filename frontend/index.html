@@ -105,18 +105,66 @@
         <!-- Upload page -->
         <section class="page" id="page-upload" data-page="upload">
             <div class="card">
-                <p class="upload-hint muted">Max 5 MB. Allowed: .txt, .json, .csv, .pdf</p>
+                <p class="upload-hint muted">Max 5 MB per file · Allowed: .txt, .json, .csv, .pdf · Select multiple files</p>
                 <div class="demo-samples" id="demoSamples">
-                    <span class="muted">Demo files:</span>
+                    <span class="muted">Demo:</span>
                     <button type="button" class="btn-sm btn-demo" id="demoSafe">Safe sample</button>
                     <button type="button" class="btn-sm btn-demo btn-demo-sensitive" id="demoSensitive">Sensitive sample</button>
                 </div>
                 <label class="upload-zone" id="dropZone">
                     <span class="upload-icon" aria-hidden="true">📁</span>
-                    <span id="fileNameDisplay">Click or drag file to scan</span>
-                    <input type="file" id="fileInput" accept=".txt,.json,.csv,.pdf">
+                    <span id="fileNameDisplay">Click or drag files to scan</span>
+                    <input type="file" id="fileInput" accept=".txt,.json,.csv,.pdf" multiple>
                 </label>
+
+                <!-- File queue -->
+                <div class="file-queue" id="fileQueue" style="display:none">
+                    <div class="queue-header">
+                        <span class="queue-title">Files queued <span class="queue-badge" id="queueCount">0</span></span>
+                        <button type="button" class="btn-sm" id="clearQueue">Clear all</button>
+                    </div>
+                    <div class="queue-list" id="queueList"></div>
+                </div>
+
+                <!-- Scan progress -->
+                <div class="scan-progress" id="scanProgress" style="display:none">
+                    <div class="progress-header">
+                        <span class="progress-label">Scanning <strong id="progressCurrent">0</strong> of <strong id="progressTotal">0</strong></span>
+                        <span class="progress-pct" id="progressPct">0%</span>
+                    </div>
+                    <div class="progress-bar-wrap">
+                        <div class="progress-bar-fill" id="progressBarFill"></div>
+                    </div>
+                </div>
+
                 <button type="button" class="btn-primary" id="btnUpload">Run Security Scan</button>
+
+                <!-- Batch summary -->
+                <div class="batch-summary" id="batchSummary" style="display:none">
+                    <div class="summary-grid">
+                        <div class="summary-card summary-allowed">
+                            <span class="summary-val" id="summaryAllowed">0</span>
+                            <span class="summary-lbl">Allowed</span>
+                        </div>
+                        <div class="summary-card summary-blocked">
+                            <span class="summary-val" id="summaryBlocked">0</span>
+                            <span class="summary-lbl">Blocked</span>
+                        </div>
+                        <div class="summary-card summary-error">
+                            <span class="summary-val" id="summaryError">0</span>
+                            <span class="summary-lbl">Errors</span>
+                        </div>
+                        <div class="summary-card summary-time">
+                            <span class="summary-val" id="summaryTime">—</span>
+                            <span class="summary-lbl">Scan time</span>
+                        </div>
+                    </div>
+                    <div class="summary-actions">
+                        <button type="button" class="btn-sm" id="downloadReport">Download JSON Report</button>
+                        <button type="button" class="btn-sm" id="scanMore">Scan more files</button>
+                    </div>
+                </div>
+
                 <div id="uploadResult" class="result" role="status" aria-live="polite"></div>
             </div>
         </section>

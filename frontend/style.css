@@ -798,6 +798,265 @@ tr:hover td {
     margin-left: 4px;
 }
 
+/* ── File Queue ── */
+.file-queue {
+    margin-top: 18px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.queue-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    background: rgba(255, 255, 255, 0.04);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.queue-title {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-dim);
+}
+
+.queue-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 6px;
+    border-radius: 20px;
+    background: rgba(0, 242, 255, 0.15);
+    color: var(--primary);
+    font-size: 0.75rem;
+    font-weight: 700;
+    margin-left: 6px;
+}
+
+.queue-list {
+    max-height: 320px;
+    overflow-y: auto;
+}
+
+.queue-item {
+    padding: 10px 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    transition: background 0.15s;
+}
+
+.queue-item:last-child { border-bottom: none; }
+
+.queue-item-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.queue-icon {
+    font-size: 0.9rem;
+    flex-shrink: 0;
+    width: 16px;
+    text-align: center;
+}
+
+.queue-icon-pending   { color: var(--text-dim); }
+.queue-icon-scanning  { color: var(--primary); animation: pulse 1s infinite; }
+.queue-icon-allowed   { color: var(--success); }
+.queue-icon-blocked   { color: var(--danger); }
+.queue-icon-error     { color: var(--warning); }
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
+.queue-filename {
+    flex: 1;
+    font-size: 0.875rem;
+    color: var(--text-main);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 260px;
+}
+
+.queue-size {
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    flex-shrink: 0;
+}
+
+.queue-detail {
+    font-size: 0.78rem;
+    margin-top: 5px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    margin-left: 26px;
+}
+
+.queue-detail-allowed {
+    background: rgba(16, 185, 129, 0.08);
+    color: var(--success);
+}
+
+.queue-detail-blocked {
+    background: rgba(239, 68, 68, 0.08);
+    color: var(--danger);
+}
+
+.queue-detail-error {
+    background: rgba(245, 158, 11, 0.08);
+    color: var(--warning);
+}
+
+.queue-detail code {
+    font-family: monospace;
+    font-size: 0.75rem;
+    word-break: break-all;
+}
+
+.btn-remove-file {
+    flex-shrink: 0;
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    font-size: 1.1rem;
+    line-height: 1;
+    padding: 2px 6px;
+    border-radius: 4px;
+    transition: color 0.15s, background 0.15s;
+}
+
+.btn-remove-file:hover { color: var(--danger); background: rgba(239,68,68,0.1); }
+
+/* Status row colors */
+.queue-status-scanning { background: rgba(0, 242, 255, 0.04); }
+.queue-status-allowed  { background: rgba(16, 185, 129, 0.04); }
+.queue-status-blocked  { background: rgba(239, 68, 68, 0.04); }
+.queue-status-error    { background: rgba(245, 158, 11, 0.04); }
+
+/* ── Risk Badges ── */
+.risk-badge {
+    flex-shrink: 0;
+    padding: 2px 8px;
+    border-radius: 20px;
+    font-size: 0.68rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.risk-low    { background: rgba(16, 185, 129, 0.15); color: var(--success); }
+.risk-medium { background: rgba(245, 158, 11, 0.15); color: var(--warning); }
+.risk-high   { background: rgba(239, 68, 68, 0.2);   color: var(--danger); }
+
+/* ── Scan time label ── */
+.scan-time {
+    flex-shrink: 0;
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    font-family: monospace;
+}
+
+/* ── Progress Bar ── */
+.scan-progress {
+    margin-top: 16px;
+    padding: 14px 16px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 10px;
+}
+
+.progress-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.progress-label {
+    font-size: 0.85rem;
+    color: var(--text-dim);
+}
+
+.progress-pct {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--primary);
+    font-family: monospace;
+}
+
+.progress-bar-wrap {
+    height: 6px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.progress-bar-fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, var(--secondary), var(--primary));
+    border-radius: 6px;
+    transition: width 0.35s ease;
+}
+
+/* ── Batch Summary ── */
+.batch-summary {
+    margin-top: 20px;
+    padding: 18px 20px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+}
+
+.summary-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 14px;
+}
+
+.summary-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 14px 10px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.summary-val {
+    font-family: 'Outfit', sans-serif;
+    font-size: 1.6rem;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.summary-lbl {
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.summary-allowed .summary-val { color: var(--success); }
+.summary-blocked .summary-val { color: var(--danger); }
+.summary-error   .summary-val { color: var(--warning); }
+.summary-time    .summary-val { color: var(--primary); font-size: 1.1rem; }
+
+.summary-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
 @media (max-width: 768px) {
     body {
         flex-direction: column;
@@ -820,6 +1079,12 @@ tr:hover td {
     }
     .main {
         padding: 20px 16px;
+    }
+    .summary-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+    .queue-filename {
+        max-width: 140px;
     }
 }
 
